@@ -1,0 +1,144 @@
+You are helping me build Module 3 (the "Tier 3 Active Learning SOC Dashboard") of a hackathon project called TTA-NIDS. I am the full-stack developer on a 3-person team. Do NOT worry about Member 1 or Member 2's internal implementation — you only need to build my component and integrate against the fixed API contract below.
+
+CONTEXT
+- This is a 36-hour hackathon project. Prioritize working end-to-end over polish or architectural purity.
+- My component is a human-in-the-loop review dashboard. It receives low-confidence network traffic classifications, shows them to a human analyst, and sends the human's verdict back to a teammate's ML service so it can retrain.
+
+FIXED DATA CONTRACT (do not change these field names or the feature order)
+Every network flow is represented by a 10-element array of MinMax-scaled (0.0–1.0) floats in this exact order:
+1. sttl 2. sbytes 3. dbytes 4. sload 5. dur 6. rate 7. tcprtt 8. synack 9. ackdat 10. ct_dst_src_ltm
+
+FIXED API CONTRACT
+1. POST /review_alert (Member 2 -> me). Body: {flow_id: string, model_confidence: float, predicted_class: string, features: float[10]}. My server must accept this.
+2. POST /update_weights (me -> Member 2, running on http://localhost:5000). Body: {flow_id: string, human_verified_label: int (0 or 1), features: float[10]}.
+
+WHAT I NEED YOU TO BUILD, IN ORDER
+
+Step 1 — Backend (SOC API)
+- Framework: [FastAPI / Flask — pick one, I prefer ___]
+- Port: 5001 (must not collide with Member 2's 5000)
+- Implement POST /review_alert exactly matching the schema above. On receipt, store the alert in an in-memory queue keyed by flow_id.
+- Implement GET /pending_alerts returning the current queue as a JSON list.
+- Implement POST /resolve_alert/{flow_id} that: (a) removes the alert from the queue, (b) forwards {flow_id, human_verified_label, features} to http://localhost:5000/update_weights, (c) returns success/failure to the caller so the frontend can show a confirmation or error.
+- Add CORS support so a browser-based frontend can call this locally.
+- Include a small standalone mock script that POSTs a few fake /review_alert payloads (matching the schema) so I can test the UI before Member 2's real model is ready.
+
+Step 2 — Frontend Dashboard
+- Framework: [Streamlit — fastest for a hackathon / React — only if I say so]
+- Poll GET /pending_alerts every 1–2 seconds.
+- Show a "live feed" section (even simple: a scrolling table of flow_id + timestamp + status) to visually sell "live traffic" during the demo.
+- When pending_alerts is non-empty, show a visually distinct alert card: flow_id, model_confidence, predicted_class, and a chart/table of the 10 named features.
+- Implement basic outlier highlighting: given a reference vector of "typical benign" feature values (I will provide this, or use a placeholder of all 0.1s for now), highlight any feature whose deviation from that baseline exceeds a threshold (e.g. 0.3). Label this clearly as "deviation from benign baseline," not "SHAP values," unless I explicitly ask you to wire in real SHAP.
+- Add two buttons: "Label as Malicious" (sends human_verified_label=1) and "Label as Benign" (sends human_verified_label=0). On click, call POST /resolve_alert/{flow_id} on my own backend.
+- Show a clear success/failure confirmation after each label action.
+- Add small counters: total alerts seen, total resolved, currently pending.
+UPDATE — Confidence-based color coding
+
+The upstream model returns a probability P (0.0–1.0, likelihood the flow is an attack). Apply this threshold logic everywhere a flow's status is displayed:
+
+- P < 0.1  -> "Benign"   -> green
+- P > 0.9  -> "Attack"   -> red (autonomous block, shown for visual effect if the event is forwarded to me)
+- 0.1 <= P <= 0.9 -> "Ambiguous" -> yellow/orange, and this is the ONLY case that should appear in the pending-alerts queue
+
+Implementation requirements:
+- Write a single pure function, e.g. get_alert_status(p: float) -> tuple[str, str] returning (label, color), and reuse it everywhere a P value is rendered (live feed rows, alert cards, summary counters). Do not duplicate the threshold logic inline in multiple UI components.
+- Define the two thresholds (0.1 and 0.9) as named constants at the top of the file so they're trivially tunable later.
+- The live feed should visually distinguish all three states by color, even if I'm currently only receiving ambiguous alerts via /review_alert. If a /log_event style endpoint doesn't exist yet, use placeholder/mock data with green and red entries so the color-coding is visibly testable now.
+- Add a small legend/key in the UI (e.g., green dot = benign, yellow = under review, red = blocked) so judges immediately understand the color scheme without narration.
+- Update the mock test script to send a spread of P values across all three buckets so I can visually confirm the color logic before integrating with the real model.
+
+Step 3 — Resilience for the live demo
+- If /update_weights (Member 2's endpoint) is unreachable or errors, the UI must show a visible error state, not hang or crash.
+- The queue and UI must handle multiple alerts arriving in quick succession without losing any.
+
+CONSTRAINTS
+- Keep dependencies minimal — assume a laptop with Python 3.x, pip, and standard libraries only, no external DB or message broker.
+- No authentication needed, this is local-only for the hackathon.
+- Prioritize something fully working over something elegant. Flag any part you had to simplify due to time.
+
+INTEGRATION SAFETY RULES
+
+- Treat each 10-element feature array as a network-flow representation, not an individual packet.
+- Validate that features contains exactly 10 values and that each value is in [0.0, 1.0].
+- Validate model_confidence is in [0.0, 1.0].
+- Validate human_verified_label is exactly 0 or 1.
+- The pending-alert store is an in-memory dictionary keyed by flow_id.
+- Duplicate flow_id submissions should update the existing pending alert rather than create duplicates.
+- Generate an internal received_at timestamp when /review_alert is received; do not modify the upstream API contract.
+- /resolve_alert/{flow_id} must contact Member 2 BEFORE removing the alert from the pending queue.
+- Remove the alert only after Member 2 confirms successful receipt of /update_weights.
+- If Member 2 is unreachable, times out, or returns an error, retain the alert and return a clear failure response.
+- Use a short HTTP timeout (approximately 3 seconds) when communicating with Member 2.
+- Keep a small in-memory resolved-alert history so total/resolved statistics remain available.
+- "Feature Deviation Analysis" must be clearly distinguished from SHAP. Do not claim SHAP unless actual SHAP calculations are implemented.
+- The three-state color logic must exist in exactly one reusable function and be used throughout the UI.
+- The /review_alert endpoint is the authoritative source for human-review alerts. Any green/red events shown in the live feed are mock/demo events unless an actual event-ingestion endpoint is later added.
+- Do not modify the Member 1 ↔ Member 2 ↔ Member 3 API field names or feature ordering.
+
+SIGMOID CONFIDENCE / STATUS LOGIC
+
+The upstream model's `model_confidence` is a probability P ∈ [0.0, 1.0] representing the likelihood that the network flow is malicious.
+
+Define these constants once and use them everywhere:
+
+- BENIGN_THRESHOLD = 0.1
+- ATTACK_THRESHOLD = 0.9
+
+Define one pure function:
+
+get_alert_status(P) → (status_label, color, severity)
+
+with the following exact logic:
+
+- P < 0.1:
+    status_label = "Benign"
+    color = green
+    severity = "low"
+
+- 0.1 ≤ P ≤ 0.9:
+    status_label = "Ambiguous"
+    color = yellow/orange
+    severity = "medium"
+    The flow requires human review and is eligible for the pending-alert queue.
+
+- P > 0.9:
+    status_label = "Attack"
+    color = red
+    severity = "high"
+    The flow represents a high-confidence autonomous detection.
+
+IMPORTANT:
+- Use this single function everywhere the probability/status is displayed.
+- Do not duplicate threshold comparisons inside individual UI components.
+- Do not use a separate confidence threshold anywhere else in Member 3.
+- `model_confidence` must always be interpreted as P(attack), not generic model confidence.
+- The boundary values are intentional:
+    P = 0.10 → Ambiguous
+    P = 0.90 → Ambiguous
+    P = 0.100... → Ambiguous
+    P = 0.900... → Ambiguous
+- Only P < 0.1 is Benign.
+- Only P > 0.9 is Attack.
+- Everything else is Ambiguous.
+
+The same status/color mapping must be used for:
+1. Live-feed rows
+2. Alert cards
+3. Feature-analysis panels
+4. Summary counters
+5. Alert badges
+6. Status indicators
+7. Mock/demo events
+8. Any future event-ingestion endpoint
+
+UI legend:
+
+🟢 Benign       P < 0.1
+🟡 Ambiguous    0.1 ≤ P ≤ 0.9
+🔴 Attack       P > 0.9
+
+The `/review_alert` endpoint should normally receive only Ambiguous flows because Member 2 is responsible for routing low-confidence predictions to Tier 3. However, Member 3 must still correctly color-code a Benign or Attack event if one is received, particularly for mock/demo events.
+
+Do not assume that `predicted_class` from Member 2 is authoritative for UI color coding. Derive the displayed status from `model_confidence` using `get_alert_status(P)`. The upstream `predicted_class` may still be displayed as supplementary information.
+
+Please start with Step 1, give me runnable code, and tell me exactly how to run it and test it against the mock script before touching Step 2.
