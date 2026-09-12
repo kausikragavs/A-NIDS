@@ -9,7 +9,7 @@ The entire system consists of three interconnected services. We have provided a 
 1. Open a PowerShell terminal.
 2. Navigate to the project root directory:
    ```powershell
-   cd d:\vit\SEM3\AIDS
+   cd <navigate to your local repo>
    ```
 3. Execute the startup script:
    ```powershell
