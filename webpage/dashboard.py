@@ -124,7 +124,6 @@ with st.sidebar.expander("Baseline Vector (UNSW-NB15)"):
 
 st.sidebar.divider()
 st.sidebar.subheader("\u23f1\ufe0f Real-Time Simulation")
-st.sidebar.write("Continuously injects 96% benign, 2% attack, 2% ambiguous packets every 20s without blocking the UI.")
 sim_running = st.sidebar.toggle("Start Simulation")
 if sim_running != st.session_state.get("simulation_running", False):
     st.session_state["simulation_running"] = sim_running
