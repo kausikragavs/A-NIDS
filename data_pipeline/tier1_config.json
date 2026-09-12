@@ -1,0 +1,8 @@
+{
+    "threshold": 0.014127803966403008,
+    "percentile": 95,
+    "input_dim": 10,
+    "architecture": "10->6->3->6->10",
+    "data_min_observed": 0.0,
+    "data_max_observed": 1.0
+}
